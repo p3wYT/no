@@ -16,3 +16,6 @@ prisma/*.db
 # test env (local only)
 .env.test
 *.tsbuildinfo
+
+# local redis snapshots
+*.rdb
