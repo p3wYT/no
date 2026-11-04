@@ -9,6 +9,27 @@ import type { SocialAccount } from "@prisma/client";
 
 const REFRESH_SKEW_MS = 5 * 60 * 1000;
 
+/**
+ * Exchange the stored refresh credential for a new access token and persist
+ * it (encrypted). Used both on demand and by the proactive refresh scan.
+ */
+export async function refreshStoredToken(account: SocialAccount): Promise<string> {
+  if (!account.refreshTokenEnc) throw new Error(`Account ${account.id} has no refresh credential`);
+  const provider = getProvider(account.platform);
+  const refreshed = await provider.refresh(decrypt(account.refreshTokenEnc));
+  await prisma.socialAccount.update({
+    where: { id: account.id },
+    data: {
+      accessTokenEnc: encrypt(refreshed.accessToken),
+      refreshTokenEnc: refreshed.refreshToken ? encrypt(refreshed.refreshToken) : account.refreshTokenEnc,
+      tokenExpiresAt: refreshed.expiresAt,
+      status: "CONNECTED",
+      statusDetail: null,
+    },
+  });
+  return refreshed.accessToken;
+}
+
 export async function getValidAccessToken(account: SocialAccount): Promise<string> {
   if (!account.accessTokenEnc) {
     throw new Error(`Account ${account.id} has no access token`);
@@ -35,19 +56,7 @@ export async function getValidAccessToken(account: SocialAccount): Promise<strin
   }
 
   try {
-    const provider = getProvider(account.platform);
-    const refreshed = await provider.refresh(decrypt(account.refreshTokenEnc));
-    await prisma.socialAccount.update({
-      where: { id: account.id },
-      data: {
-        accessTokenEnc: encrypt(refreshed.accessToken),
-        refreshTokenEnc: refreshed.refreshToken ? encrypt(refreshed.refreshToken) : account.refreshTokenEnc,
-        tokenExpiresAt: refreshed.expiresAt,
-        status: "CONNECTED",
-        statusDetail: null,
-      },
-    });
-    return refreshed.accessToken;
+    return await refreshStoredToken(account);
   } catch (err) {
     logger.error({ err, accountId: account.id }, "token refresh failed");
     await prisma.socialAccount.update({

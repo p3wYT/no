@@ -22,7 +22,7 @@ export interface ProcessPayload { assetId: string }
 export interface PublishPayload { jobId: string }
 export interface ReconcilePayload { jobId: string }
 export interface TokenRefreshPayload { accountId: string }
-export interface MaintenancePayload { task: "scheduler" | "cleanup" | "poll-scan" }
+export interface MaintenancePayload { task: "scheduler" | "cleanup" | "poll-scan" | "token-scan" }
 
 const connection = createRedis();
 

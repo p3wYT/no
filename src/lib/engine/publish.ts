@@ -42,7 +42,11 @@ export async function executePublishJob(jobId: string): Promise<void> {
 
     // Reconcile a possibly-lost prior attempt before uploading again.
     if (job.providerUploadRef && provider.reconcile) {
-      const outcome = await provider.reconcile({ accessToken: token, providerUploadRef: job.providerUploadRef });
+      const outcome = await provider.reconcile({
+        accessToken: token,
+        providerUploadRef: job.providerUploadRef,
+        providerAccountId: job.destinationAccount.providerAccountId,
+      });
       if (outcome.kind === "published") {
         await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url, outcome.note);
         return;
@@ -158,9 +162,20 @@ async function handleFailure(jobId: string, err: unknown) {
   const attempts = job.attempts;
   const willRetry = err instanceof ProviderError && err.opts.retryable && attempts < job.maxAttempts;
 
+  // Remember a provider-side container created before the failure so the retry
+  // reconciles it (no duplicate post), or forget one that is dead.
+  const uploadRefUpdate =
+    err instanceof ProviderError
+      ? err.opts.uploadRef
+        ? { providerUploadRef: err.opts.uploadRef }
+        : err.opts.clearUploadRef
+          ? { providerUploadRef: null }
+          : {}
+      : {};
+
   await prisma.publishJob.update({
     where: { id: jobId },
-    data: { status: "FAILED", lastError: message },
+    data: { status: "FAILED", lastError: message, ...uploadRefUpdate },
   });
 
   logger.error({ jobId, attempts, willRetry, err }, "publish failed");
@@ -200,7 +215,11 @@ export async function reconcilePublishJob(jobId: string): Promise<void> {
   if (!provider.reconcile) return;
 
   const token = await getValidAccessToken(job.destinationAccount);
-  const outcome = await provider.reconcile({ accessToken: token, providerUploadRef: job.providerUploadRef });
+  const outcome = await provider.reconcile({
+    accessToken: token,
+    providerUploadRef: job.providerUploadRef,
+    providerAccountId: job.destinationAccount.providerAccountId,
+  });
   if (outcome.kind === "published") {
     await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url, outcome.note);
   } else if (outcome.kind === "processing") {

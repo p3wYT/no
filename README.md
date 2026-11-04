@@ -190,14 +190,46 @@ the **YouTube API Services audit**, `videos.insert` uploads are locked to
 post. Default quota is 10,000 units/day (an upload ≈ 1,600).
 
 ### Instagram (Meta)
-1. developers.facebook.com → create app (Business).
-2. Add **Instagram** + **Facebook Login**; request `instagram_basic`,
-   `instagram_content_publish`, `pages_show_list`, `business_management`.
-3. Redirect URI: `.../api/connect/instagram/callback`.
-4. Set `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`.
-5. **Only Instagram Business/Creator accounts linked to a Facebook Page can
-   publish.** Personal accounts connect read-only — the UI says so. App Review
-   is required for publishing scopes in production.
+Callback URL: `https://YOUR_APP_URL/api/connect/instagram/callback`
+
+RepostFlow implements **"API setup with Facebook Login"** (Instagram API with
+Facebook Login): the Facebook login dialog with `scope=`, Facebook User access
+tokens, Pages-based account discovery, and publishing through
+`graph.facebook.com`. It does **not** implement "API setup with Instagram Login"
+(`instagram_business_*` scopes, `graph.instagram.com`) or Facebook Login for
+Business (`config_id`, system-user tokens). A Meta app can only have one API
+setup, so choose this one when adding the use case.
+
+1. [developers.facebook.com](https://developers.facebook.com) -> **Create app**
+   -> use case **Manage messaging & content on Instagram** (app type
+   *Business*).
+2. In the use case, choose **API setup with Facebook login**.
+3. **Facebook Login settings** -> *Valid OAuth Redirect URIs*: the callback URL
+   above, exactly. Leave *Client OAuth Login* and *Web OAuth Login* on.
+4. **App settings -> Basic**: add your *App domains* (`up.railway.app` or your
+   custom domain) and a Privacy Policy URL.
+5. **Credentials**: use the **Meta App ID and App Secret** from *App settings ->
+   Basic*, not any separate "Instagram app ID". Enter them as the shared
+   variables `INSTAGRAM_APP_ID` / `INSTAGRAM_APP_SECRET` in Railway (seal the
+   secret).
+6. **Roles**: while the app is in Development mode only people with a role on
+   the app (Admin/Developer/Tester) can connect. Add the accounts you will test
+   with, and accept the invitations.
+7. The Instagram account must be **Business or Creator**, and linked to a
+   **Facebook Page** that the connecting person can manage.
+
+Permissions requested: `instagram_basic`, `instagram_content_publish`,
+`pages_show_list`, `pages_read_engagement`, `business_management`. Publishing is
+only enabled for an account if every one except `business_management` was
+actually granted in the consent dialog. Going live for people without an app
+role requires Meta **App Review** (advanced access) for these permissions and
+Business Verification.
+
+Behavior to know: one login connects *every* Instagram account reachable
+through your Pages. Access tokens last ~60 days; the worker renews them
+automatically starting 14 days before expiry and warns you if renewal fails.
+Limit: 100 API-published posts per rolling 24 hours. The Graph API version is
+pinned in `src/lib/providers/instagram.ts` (`GRAPH_VERSION`).
 
 ### TikTok
 1. developers.tiktok.com → create app; add **Login Kit** + **Content Posting

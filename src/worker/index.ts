@@ -22,7 +22,7 @@ import { detectForAccount } from "@/lib/engine/detection";
 import { executePublishJob, reconcilePublishJob } from "@/lib/engine/publish";
 import { processDetectedPost, ensureAssetMatch } from "@/lib/engine/automations";
 import { probeAndStoreAsset } from "@/lib/engine/media";
-import { refreshAccountToken } from "@/lib/engine/maintenance";
+import { refreshAccountToken, findAccountsNeedingRefresh } from "@/lib/engine/maintenance";
 import { ensureBucketCors, isStorageConfigured } from "@/lib/storage";
 
 getEnv(); // validate env on startup; crash loudly if misconfigured.
@@ -104,6 +104,14 @@ async function runMaintenance(task: MaintenancePayload["task"]) {
       await queues.publish().add("publish", { jobId: j.id }, { jobId: `publish:${j.id}` });
     }
     if (due.length) logger.info({ count: due.length }, "scheduler re-enqueued due jobs");
+  } else if (task === "token-scan") {
+    // Renew long-lived tokens (Instagram) before they lapse.
+    const due = await findAccountsNeedingRefresh(now);
+    const day = now.toISOString().slice(0, 10);
+    for (const a of due) {
+      await queues.tokenRefresh().add("token-refresh", { accountId: a.id }, { jobId: `token-refresh-${a.id}-${day}` });
+    }
+    if (due.length) logger.info({ count: due.length }, "token-scan enqueued renewals");
   } else if (task === "cleanup") {
     const cutoff = new Date(Date.now() - 1000 * 60 * 60 * 24 * 90);
     await prisma.activityEvent.deleteMany({ where: { createdAt: { lt: cutoff } } });
@@ -116,6 +124,7 @@ async function installRepeatables() {
   const mq = queues.maintenance();
   await mq.add("poll-scan", { task: "poll-scan" }, { repeat: { every: 60_000 }, jobId: "repeat:poll-scan" });
   await mq.add("scheduler", { task: "scheduler" }, { repeat: { every: 60_000 }, jobId: "repeat:scheduler" });
+  await mq.add("token-scan", { task: "token-scan" }, { repeat: { every: 6 * 60 * 60_000 }, jobId: "repeat:token-scan" });
   await mq.add("cleanup", { task: "cleanup" }, { repeat: { pattern: "0 4 * * *" }, jobId: "repeat:cleanup" });
   logger.info("repeatable maintenance jobs installed");
 }

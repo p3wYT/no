@@ -14,7 +14,16 @@ export class NotConfiguredError extends Error {
 export class ProviderError extends Error {
   constructor(
     message: string,
-    public opts: { retryable?: boolean; code?: string; platform?: Platform } = {},
+    public opts: {
+      retryable?: boolean;
+      code?: string;
+      platform?: Platform;
+      // Provider-side upload/container id created before the failure. It is
+      // persisted on the job so the retry reconciles instead of re-uploading.
+      uploadRef?: string;
+      // The stored upload ref is dead (expired/errored); forget it.
+      clearUploadRef?: boolean;
+    } = {},
   ) {
     super(message);
     this.name = "ProviderError";
@@ -85,10 +94,17 @@ export interface Provider {
   exchangeCode(args: { code: string; verifier: string; redirectUri: string }): Promise<{
     tokens: OAuthTokens;
     account: RemoteAccountInfo;
+    // Further accounts reachable with the same authorization (e.g. several
+    // Instagram accounts behind one Facebook login). Saved alongside `account`.
+    additionalAccounts?: RemoteAccountInfo[];
   }>;
   refresh(refreshToken: string): Promise<OAuthTokens>;
   listRecentPosts(args: { accessToken: string; providerAccountId: string; limit?: number }): Promise<RemotePost[]>;
   publish(args: { accessToken: string; providerAccountId: string; input: PublishInput }): Promise<PublishOutcome>;
   /** Reconcile a possibly-lost publish response. */
-  reconcile?(args: { accessToken: string; providerUploadRef: string }): Promise<PublishOutcome>;
+  reconcile?(args: {
+    accessToken: string;
+    providerUploadRef: string;
+    providerAccountId: string;
+  }): Promise<PublishOutcome>;
 }

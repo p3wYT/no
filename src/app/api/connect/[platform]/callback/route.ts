@@ -40,54 +40,54 @@ export async function GET(req: NextRequest, context: { params: Promise<{ platfor
   try {
     const provider = getProvider(platform);
     const redirectUri = `${appUrl()}/api/connect/${rawPlatform.toLowerCase()}/callback`;
-    const { tokens, account } = await provider.exchangeCode({ code, verifier: state.verifier, redirectUri });
+    const { tokens, account, additionalAccounts = [] } = await provider.exchangeCode({
+      code,
+      verifier: state.verifier,
+      redirectUri,
+    });
 
-    const saved = await prisma.socialAccount.upsert({
-      where: {
-        userId_platform_providerAccountId: {
+    // One authorization can reach several accounts (e.g. multiple Instagram
+    // accounts behind one Facebook login); they share the same credentials.
+    for (const remote of [account, ...additionalAccounts]) {
+      const data = {
+        username: remote.username,
+        displayName: remote.displayName,
+        avatarUrl: remote.avatarUrl,
+        accessTokenEnc: encryptNullable(tokens.accessToken),
+        refreshTokenEnc: encryptNullable(tokens.refreshToken),
+        tokenExpiresAt: tokens.expiresAt,
+        scopes: tokens.scopes,
+        status: remote.canPublish ? ("CONNECTED" as const) : ("LIMITED" as const),
+        canPublish: remote.canPublish,
+        statusDetail: remote.statusDetail,
+      };
+      const saved = await prisma.socialAccount.upsert({
+        where: {
+          userId_platform_providerAccountId: {
+            userId: state.userId,
+            platform,
+            providerAccountId: remote.providerAccountId,
+          },
+        },
+        create: {
           userId: state.userId,
           platform,
-          providerAccountId: account.providerAccountId,
+          providerAccountId: remote.providerAccountId,
+          ...data,
+          // Establish a baseline so enabling automations never backfills history.
+          baselineAt: new Date(),
+          lastCheckedAt: new Date(),
         },
-      },
-      create: {
-        userId: state.userId,
-        platform,
-        providerAccountId: account.providerAccountId,
-        username: account.username,
-        displayName: account.displayName,
-        avatarUrl: account.avatarUrl,
-        accessTokenEnc: encryptNullable(tokens.accessToken),
-        refreshTokenEnc: encryptNullable(tokens.refreshToken),
-        tokenExpiresAt: tokens.expiresAt,
-        scopes: tokens.scopes,
-        status: account.canPublish ? "CONNECTED" : "LIMITED",
-        canPublish: account.canPublish,
-        statusDetail: account.statusDetail,
-        // Establish a baseline so enabling automations never backfills history.
-        baselineAt: new Date(),
-        lastCheckedAt: new Date(),
-      },
-      update: {
-        username: account.username,
-        displayName: account.displayName,
-        avatarUrl: account.avatarUrl,
-        accessTokenEnc: encryptNullable(tokens.accessToken),
-        refreshTokenEnc: encryptNullable(tokens.refreshToken),
-        tokenExpiresAt: tokens.expiresAt,
-        scopes: tokens.scopes,
-        status: account.canPublish ? "CONNECTED" : "LIMITED",
-        canPublish: account.canPublish,
-        statusDetail: account.statusDetail,
-      },
-    });
+        update: data,
+      });
 
-    await logActivity({
-      userId: state.userId,
-      kind: "account.connected",
-      message: `Connected ${platform} account @${account.username ?? account.providerAccountId}`,
-      meta: { accountId: saved.id },
-    });
+      await logActivity({
+        userId: state.userId,
+        kind: "account.connected",
+        message: `Connected ${platform} account @${remote.username ?? remote.providerAccountId}`,
+        meta: { accountId: saved.id },
+      });
+    }
 
     return NextResponse.redirect(new URL(`/accounts?connected=${platform}`, appUrl()));
   } catch (err) {
