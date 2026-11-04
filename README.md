@@ -107,28 +107,42 @@ correct final statuses — plus idempotency and loop protection.
 
 ## Railway deployment
 
-RepostFlow deploys as **two services from this one repo/image**, plus Railway
-PostgreSQL and Redis, plus external S3-compatible storage.
+RepostFlow runs as **two services built from this one repo/Dockerfile**, plus
+Railway PostgreSQL and Redis, plus S3-compatible storage (Cloudflare R2).
+Railway's config-as-code (`railway.json`) is deprecated for new services, so
+service settings live in Railway itself:
 
-1. **Create the Postgres and Redis plugins** in your Railway project. They
-   expose `DATABASE_URL` and `REDIS_URL`.
-2. **Web service** — deploy this repo (Dockerfile build). `railway.json` sets
-   the start command `npm run start:web` (runs `prisma migrate deploy` then
-   `next start`) and health check `/api/health`.
-3. **Worker service** — add a second service from the *same* repo. Override its
-   start command to **`npm run start:worker`**. Point its health check at
-   `/health` (the worker binds `PORT`).
-4. **Shared variables** (set on both services): `DATABASE_URL`, `REDIS_URL`,
-   `APP_URL` (your public web domain, https), `AUTH_SECRET`, `ENCRYPTION_KEY`,
-   the `S3_*` storage vars, and whichever platform OAuth credentials you have.
-5. Redeploy. Scheduled jobs persist in Redis and survive restarts; the worker's
-   `scheduler` sweep re-enqueues any due job after a redeploy.
+| Service | Start command | Pre-deploy | Health check |
+|---|---|---|---|
+| `web` | `npm run start` | `npx prisma migrate deploy` | `/api/health` (DB + Redis) |
+| `worker` | `npm run start:worker` | — | `/health` (Redis) |
 
-Object storage: use **Cloudflare R2** or any S3-compatible bucket (set
-`S3_ENDPOINT`, `S3_BUCKET`, keys). The app streams uploads via presigned URLs so
-large videos never buffer through the server's memory or disk.
+Variables (production environment):
+- **Shared**: `NODE_ENV=production`, `DEMO_MODE=false`, `APP_URL` (public https
+  web domain), `AUTH_SECRET`, `ENCRYPTION_KEY`, `TIKTOK_AUDITED=false`.
+- **Per service**: `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
+  `REDIS_URL=${{Redis.REDIS_URL}}` (private network), `PORT` (web 3000,
+  worker 8080), plus references to the shared values.
+- **Storage (R2)**: `S3_ENDPOINT`, `S3_REGION=auto`, `S3_BUCKET`,
+  `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` on both services.
+- **Platforms**: OAuth credentials on both services as they become available.
 
----
+> `ENCRYPTION_KEY` must never change after accounts are connected — stored OAuth
+> tokens are encrypted with it.
+
+Scheduled jobs persist in Redis and survive restarts; the worker's `scheduler`
+sweep re-enqueues any due job after a redeploy.
+
+### Cloudflare R2 setup
+1. Cloudflare dashboard → R2 → **Create bucket** (e.g. `repostflow-media`).
+2. R2 → **Manage API tokens** → create a token with *Object Read & Write* on
+   that bucket. Note the Access Key ID, Secret Access Key and the account's
+   S3 endpoint `https://<ACCOUNT_ID>.r2.cloudflarestorage.com`.
+3. Bucket → Settings → **CORS policy** (browser uploads use presigned PUTs):
+   ```json
+   [{"AllowedOrigins":["https://YOUR_APP_URL"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["content-type"],"MaxAgeSeconds":3600}]
+   ```
+4. Set the five `S3_*` variables on both `web` and `worker` in Railway.
 
 ## Platform developer-app setup
 
