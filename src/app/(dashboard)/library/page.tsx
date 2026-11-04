@@ -7,7 +7,7 @@ import { Card, CardContent, Button, Input, Badge, Select } from "@/components/ui
 import { PlatformIcon } from "@/components/platform-icon";
 import { StatusBadge } from "@/components/status-badge";
 import { formatRelative, formatDuration } from "@/lib/utils";
-import { Upload, Trash2, Loader2, Film, Link2, Search } from "lucide-react";
+import { Upload, Trash2, Loader2, Film, Link2, Search, Play } from "lucide-react";
 
 async function sha256Hex(file: File): Promise<string | undefined> {
   try {
@@ -41,13 +41,15 @@ export default function LibraryPage() {
       });
       if (init.uploadUrl) {
         const put = await fetch(init.uploadUrl, { method: "PUT", headers: { "content-type": file.type || "video/mp4" }, body: file });
-        if (!put.ok) throw new Error("Upload to storage failed");
+        if (!put.ok) throw new Error(`Upload to storage failed (${put.status})`);
         await apiPost(`/api/assets/${init.asset.id}/complete`, { contentHash: hash });
-        setUploadMsg("Uploaded. Probing metadata in the background…");
+        setUploadMsg("Uploaded. Reading duration and resolution in the background…");
+      } else if (init.demo) {
+        await apiPost(`/api/assets/${init.asset.id}/complete`, { contentHash: hash });
+        setUploadMsg("Demo mode: no file was stored.");
       } else {
-        // Storage not configured — record metadata only.
-        await apiPost(`/api/assets/${init.asset.id}/complete`, { contentHash: hash });
-        setUploadMsg("Object storage isn't configured, so only metadata was saved. Set S3_* env vars for real uploads.");
+        await apiDelete(`/api/assets/${init.asset.id}`);
+        throw new Error("Video storage isn't configured on the server yet, so the file wasn't uploaded.");
       }
       refresh();
     } catch (err) {
@@ -139,7 +141,14 @@ export default function LibraryPage() {
                       {formatDuration(a.durationSec)} · {a.aspectRatio || "—"} · {a.uploadComplete ? "Ready" : "Uploading"}
                     </p>
                   </div>
-                  <Button variant="ghost" size="icon" onClick={() => remove(a.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  <div className="flex shrink-0">
+                    {a.uploadComplete && (
+                      <a href={`/api/assets/${a.id}/download`} target="_blank" rel="noreferrer" title="Preview original">
+                        <Button variant="ghost" size="icon"><Play className="h-4 w-4" /></Button>
+                      </a>
+                    )}
+                    <Button variant="ghost" size="icon" onClick={() => remove(a.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </div>
                 </div>
                 {a.publishJobs?.length > 0 && (
                   <div className="mt-2 flex flex-wrap gap-1">

@@ -73,9 +73,23 @@ export const queues = {
  * second layer of idempotency on top of the DB unique constraint.
  */
 export async function enqueuePublishAt(jobId: string, when: Date): Promise<void> {
-  const delay = Math.max(0, when.getTime() - Date.now());
-  const opts: JobsOptions = { jobId: `publish:${jobId}`, delay };
-  await queues.publish().add("publish", { jobId }, opts);
+  const q = queues.publish();
+  const id = `publish:${jobId}`;
+  // BullMQ ignores add() for an id that already exists (finished jobs are kept
+  // for days), which would turn retries and reschedules into silent no-ops.
+  // Replace any existing job unless it is running right now; the DB status is
+  // the guard against double-publishing.
+  const existing = await q.getJob(id);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === "active") return;
+    await existing.remove().catch(() => undefined);
+  }
+  const delay = when.getTime() - Date.now();
+  // Only pass delay when positive: an explicit delay of 0 parks the job in the
+  // delayed set instead of the wait queue.
+  const opts: JobsOptions = delay > 0 ? { jobId: id, delay } : { jobId: id };
+  await q.add("publish", { jobId }, opts);
 }
 
 export async function enqueueDetect(accountId: string, manual = false): Promise<void> {

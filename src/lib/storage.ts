@@ -7,6 +7,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
   HeadObjectCommand,
+  PutBucketCorsCommand,
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { getEnv } from "./env";
@@ -22,7 +23,13 @@ function s3(): S3Client {
     client = new S3Client({
       region: env.S3_REGION,
       endpoint: env.S3_ENDPOINT,
-      forcePathStyle: !!env.S3_ENDPOINT, // needed for R2/MinIO
+      // Railway buckets and R2 use virtual-hosted style; set
+      // S3_FORCE_PATH_STYLE=true only for providers that need path style (MinIO).
+      forcePathStyle: env.S3_FORCE_PATH_STYLE === "true",
+      // Newer SDKs add CRC32 checksums to presigned PUTs by default, which a
+      // browser upload can't supply. Only checksum when the operation needs it.
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
       credentials: {
         accessKeyId: env.S3_ACCESS_KEY_ID!,
         secretAccessKey: env.S3_SECRET_ACCESS_KEY!,
@@ -40,8 +47,12 @@ export function buildKey(userId: string, kind: "original" | "thumb", id: string,
   return `${userId}/${kind}/${id}.${ext.replace(/^\./, "")}`;
 }
 
-/** Presigned PUT URL for direct, streaming browser → storage uploads. */
-export async function presignUpload(key: string, contentType: string, maxBytes: number): Promise<string> {
+/**
+ * Presigned PUT URL for direct, streaming browser → storage uploads.
+ * Content-Type and the exact Content-Length are part of the signature, so the
+ * URL can only be used to upload a file of the size the server validated.
+ */
+export async function presignUpload(key: string, contentType: string, sizeBytes: number): Promise<string> {
   const env = getEnv();
   return getSignedUrl(
     s3(),
@@ -49,8 +60,34 @@ export async function presignUpload(key: string, contentType: string, maxBytes: 
       Bucket: env.S3_BUCKET!,
       Key: key,
       ContentType: contentType,
+      ContentLength: sizeBytes,
     }),
-    { expiresIn: 60 * 15 },
+    { expiresIn: 60 * 15, signableHeaders: new Set(["content-type", "content-length"]) },
+  );
+}
+
+/**
+ * Allow the app's own origin to PUT (upload) and GET (preview) objects from
+ * the browser. Idempotent; the worker applies it on startup so bucket
+ * credentials never have to leave Railway.
+ */
+export async function ensureBucketCors(origin: string): Promise<void> {
+  const env = getEnv();
+  await s3().send(
+    new PutBucketCorsCommand({
+      Bucket: env.S3_BUCKET!,
+      CORSConfiguration: {
+        CORSRules: [
+          {
+            AllowedOrigins: [origin],
+            AllowedMethods: ["PUT", "GET", "HEAD"],
+            AllowedHeaders: ["content-type", "content-length"],
+            ExposeHeaders: ["etag"],
+            MaxAgeSeconds: 3600,
+          },
+        ],
+      },
+    }),
   );
 }
 

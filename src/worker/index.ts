@@ -23,6 +23,7 @@ import { executePublishJob, reconcilePublishJob } from "@/lib/engine/publish";
 import { processDetectedPost, ensureAssetMatch } from "@/lib/engine/automations";
 import { probeAndStoreAsset } from "@/lib/engine/media";
 import { refreshAccountToken } from "@/lib/engine/maintenance";
+import { ensureBucketCors, isStorageConfigured } from "@/lib/storage";
 
 getEnv(); // validate env on startup; crash loudly if misconfigured.
 
@@ -137,6 +138,17 @@ const server = http.createServer(async (req, res) => {
   res.end();
 });
 server.listen(port, () => logger.info({ port }, "worker health server listening"));
+
+// Allow browser uploads/previews from the app's origin. Non-fatal: the worker
+// keeps running if the provider rejects it, and the failure is logged.
+if (isStorageConfigured()) {
+  const origin = new URL(getEnv().APP_URL).origin;
+  ensureBucketCors(origin)
+    .then(() => logger.info({ origin }, "bucket CORS configured"))
+    .catch((err) => logger.error({ err: err?.message ?? String(err) }, "bucket CORS configuration failed"));
+} else {
+  logger.warn("object storage not configured; video uploads are disabled");
+}
 
 installRepeatables().catch((err) => {
   logger.error({ err }, "failed to install repeatables");
