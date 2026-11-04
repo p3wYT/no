@@ -10,7 +10,7 @@ WORKDIR /app
 # ---- Dependencies (include dev deps; tsx runs the worker, prisma builds client) ----
 FROM base AS deps
 COPY package.json package-lock.json* ./
-RUN npm ci
+RUN npm ci --include=dev
 
 # ---- Build ----
 FROM base AS build

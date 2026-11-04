@@ -10,6 +10,8 @@ const baseOptions: RedisOptions = {
   maxRetriesPerRequest: null,
   enableReadyCheck: false,
   lazyConnect: true,
+  // Railway private networking can be IPv6; family 0 resolves both.
+  family: 0,
 };
 
 export function createRedis(): Redis {
