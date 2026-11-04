@@ -1,7 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  output: "standalone",
   serverExternalPackages: ["bullmq", "ioredis", "argon2"],
   eslint: {
     // Lint is run as a separate CI step; don't fail production builds on lint.
