@@ -1,0 +1,444 @@
+// RepostFlow database schema
+// Production persistence: PostgreSQL. Never SQLite / JSON / ephemeral FS.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum Platform {
+  TIKTOK
+  INSTAGRAM
+  YOUTUBE
+}
+
+enum AccountStatus {
+  CONNECTED
+  TOKEN_EXPIRED
+  REVOKED
+  ERROR
+  // Connected but the platform/app tier does not grant publishing scope.
+  LIMITED
+}
+
+enum ExecutionMode {
+  AUTOMATIC
+  APPROVAL_REQUIRED
+}
+
+enum ScheduleMode {
+  IMMEDIATE
+  FIXED_DELAY
+  SCHEDULED_WINDOW
+  SPECIFIC_TIME
+  QUEUE
+}
+
+enum CaptionMode {
+  KEEP_ORIGINAL
+  CUSTOM
+  TEMPLATE
+}
+
+// Lifecycle of a single publish-to-one-destination job.
+enum PublishStatus {
+  PENDING_APPROVAL
+  AWAITING_ASSET
+  SCHEDULED
+  QUEUED
+  PROCESSING
+  UPLOADING
+  // Provider accepted upload, async processing on their side.
+  PUBLISHING
+  PUBLISHED
+  FAILED
+  CANCELLED
+  // Platform allows only draft/handoff (e.g. TikTok unaudited). Not a public post.
+  DRAFT_HANDOFF
+}
+
+enum AssetSource {
+  USER_UPLOAD
+  MATCHED_UPLOAD
+  AUTHORIZED_ENDPOINT
+}
+
+enum NotificationType {
+  ACCOUNT_DISCONNECTED
+  TOKEN_REFRESH_FAILED
+  ASSET_MISSING
+  APPROVAL_REQUIRED
+  PUBLISH_FAILED
+  PUBLISH_SUCCEEDED
+  RULE_PAUSED
+}
+
+// ---------------------------------------------------------------------------
+// Auth
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  passwordHash  String
+  name          String?
+  emailVerified DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  onboardingStep Int @default(0)
+
+  sessions         Session[]
+  socialAccounts   SocialAccount[]
+  automations      Automation[]
+  videoAssets      VideoAsset[]
+  detectedPosts    DetectedPost[]
+  publishJobs      PublishJob[]
+  activityEvents   ActivityEvent[]
+  notifications    Notification[]
+  captionTemplates CaptionTemplate[]
+  preferences      UserPreferences?
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Only a SHA-256 hash of the session token is stored.
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  userAgent String?
+  ip        String?
+
+  @@index([userId])
+}
+
+model UserPreferences {
+  id                   String  @id @default(cuid())
+  userId               String  @unique
+  user                 User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  timezone             String  @default("UTC")
+  theme                String  @default("system")
+  emailNotifications   Boolean @default(false)
+  notifyOnPublish      Boolean @default(true)
+  notifyOnFailure      Boolean @default(true)
+  notifyOnApproval     Boolean @default(true)
+  notifyOnDisconnect   Boolean @default(true)
+}
+
+// ---------------------------------------------------------------------------
+// Connected social accounts
+// ---------------------------------------------------------------------------
+
+model SocialAccount {
+  id       String   @id @default(cuid())
+  userId   String
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  platform Platform
+
+  // Provider's stable account id (channel id / open id / ig user id).
+  providerAccountId String
+  username          String?
+  displayName       String?
+  avatarUrl         String?
+
+  // Encrypted (AES-256-GCM) token material. Never plaintext.
+  accessTokenEnc  String? @db.Text
+  refreshTokenEnc String? @db.Text
+  tokenExpiresAt  DateTime?
+  scopes          String[]  @default([])
+
+  status          AccountStatus @default(CONNECTED)
+  // Whether the account/app tier can actually publish (vs read-only / draft).
+  canPublish      Boolean       @default(false)
+  statusDetail    String?
+
+  // Monitoring
+  pollIntervalSec Int       @default(900)
+  monitoringOn    Boolean   @default(true)
+  lastCheckedAt   DateTime?
+  nextCheckAt     DateTime?
+  // Baseline: only posts after this are treated as "new" (no historical spam).
+  baselineAt      DateTime?
+  lastError       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  detectedPosts        DetectedPost[]
+  sourceAutomations    Automation[]   @relation("SourceAccount")
+  destinationTargets   AutomationTarget[]
+  publishJobs          PublishJob[]
+
+  @@unique([userId, platform, providerAccountId])
+  @@index([userId])
+  @@index([monitoringOn, nextCheckAt])
+}
+
+// ---------------------------------------------------------------------------
+// Original media library
+// ---------------------------------------------------------------------------
+
+model VideoAsset {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  source AssetSource @default(USER_UPLOAD)
+
+  title       String?
+  description String?
+
+  // Object storage (S3/R2) key — never stored on ephemeral FS.
+  storageKey   String?
+  thumbnailKey String?
+  originalName String?
+  mimeType     String?
+  sizeBytes    BigInt?
+  // sha-256 of the file bytes, for dedupe + matching.
+  contentHash  String?
+
+  durationSec Float?
+  width       Int?
+  height      Int?
+  // "9:16", "16:9", "1:1"
+  aspectRatio String?
+
+  // Processing lifecycle for uploaded files.
+  uploadComplete Boolean @default(false)
+  probed         Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  detectedPosts DetectedPost[]
+  publishJobs   PublishJob[]
+
+  @@index([userId])
+  @@index([userId, contentHash])
+}
+
+// ---------------------------------------------------------------------------
+// Detected source posts
+// ---------------------------------------------------------------------------
+
+model DetectedPost {
+  id        String        @id @default(cuid())
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accountId String
+  account   SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  platform  Platform
+
+  // Provider's id for the source post/video.
+  providerPostId String
+  caption        String?  @db.Text
+  title          String?
+  permalink      String?
+  thumbnailUrl   String?
+  durationSec    Float?
+  width          Int?
+  height         Int?
+  publishedAt    DateTime?
+
+  // Loop/lineage protection: set when this "detected" post was itself
+  // published BY RepostFlow (so it is never re-queued as new original).
+  originatedByJobId String? @unique
+  isRepostArtifact  Boolean @default(false)
+
+  // Matched original media (if any).
+  matchedAssetId String?
+  matchedAsset   VideoAsset? @relation(fields: [matchedAssetId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  publishJobs PublishJob[]
+
+  @@unique([accountId, providerPostId])
+  @@index([userId])
+  @@index([platform, publishedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Automation rules
+// ---------------------------------------------------------------------------
+
+model Automation {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  enabled  Boolean @default(false)
+
+  sourcePlatform  Platform
+  sourceAccountId String
+  sourceAccount   SocialAccount @relation("SourceAccount", fields: [sourceAccountId], references: [id], onDelete: Cascade)
+
+  executionMode ExecutionMode @default(APPROVAL_REQUIRED)
+
+  // Scheduling
+  scheduleMode  ScheduleMode @default(IMMEDIATE)
+  delaySeconds  Int          @default(0)
+  // JSON for window/specific-time/weekly config (validated by Zod).
+  scheduleConfig Json?
+
+  // Filters/conditions (validated by Zod, evaluated by core engine).
+  conditions Json?
+
+  // When enabled, process only content detected after this (no backfill).
+  baselineAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastRunAt DateTime?
+
+  targets     AutomationTarget[]
+  publishJobs PublishJob[]
+
+  @@index([userId])
+  @@index([enabled, sourceAccountId])
+}
+
+model AutomationTarget {
+  id           String        @id @default(cuid())
+  automationId String
+  automation   Automation    @relation(fields: [automationId], references: [id], onDelete: Cascade)
+
+  platform         Platform
+  accountId        String
+  account          SocialAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  // Per-destination caption/visibility config (validated by Zod).
+  captionMode   CaptionMode @default(KEEP_ORIGINAL)
+  captionConfig Json?
+  // "public" | "unlisted" | "private"
+  visibility    String      @default("public")
+  // Extra per-platform delay on top of automation delay (staggered posting).
+  extraDelaySec Int         @default(0)
+
+  @@unique([automationId, accountId])
+  @@index([automationId])
+}
+
+// ---------------------------------------------------------------------------
+// Publish jobs (one per destination per detected post)
+// ---------------------------------------------------------------------------
+
+model PublishJob {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  automationId String?
+  automation   Automation? @relation(fields: [automationId], references: [id], onDelete: SetNull)
+
+  detectedPostId String?
+  detectedPost   DetectedPost? @relation(fields: [detectedPostId], references: [id], onDelete: SetNull)
+
+  assetId String?
+  asset   VideoAsset? @relation(fields: [assetId], references: [id], onDelete: SetNull)
+
+  destinationAccountId String
+  destinationAccount   SocialAccount @relation(fields: [destinationAccountId], references: [id], onDelete: Cascade)
+  destinationPlatform  Platform
+
+  status     PublishStatus @default(SCHEDULED)
+  scheduledAt DateTime?
+  startedAt   DateTime?
+  publishedAt DateTime?
+
+  // Resolved caption/title/description for this destination.
+  resolvedCaption     String? @db.Text
+  resolvedTitle       String?
+  resolvedDescription String? @db.Text
+  visibility          String  @default("public")
+
+  // Provider result
+  providerPostId String?
+  publishedUrl   String?
+
+  // Idempotency: a stable key derived from (automation, detectedPost, dest).
+  // DB unique constraint is the last line of defence against double-publish.
+  idempotencyKey String @unique
+
+  // Provider-side upload/publish token for reconciliation if response is lost.
+  providerUploadRef String?
+
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(5)
+  lastError    String?   @db.Text
+  nextRetryAt  DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  events ActivityEvent[]
+
+  @@index([userId])
+  @@index([status, scheduledAt])
+  @@index([destinationAccountId])
+}
+
+// ---------------------------------------------------------------------------
+// Activity feed + notifications
+// ---------------------------------------------------------------------------
+
+model ActivityEvent {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  jobId String?
+  job   PublishJob? @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  // machine key e.g. "post.detected", "asset.matched", "publish.scheduled"
+  kind    String
+  message String
+  meta    Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+model Notification {
+  id     String           @id @default(cuid())
+  userId String
+  user   User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   NotificationType
+  title  String
+  body   String?
+  readAt DateTime?
+  meta   Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+model CaptionTemplate {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name     String
+  platform Platform?
+  // Template string with {{variables}}.
+  body     String  @db.Text
+  isDefault Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
