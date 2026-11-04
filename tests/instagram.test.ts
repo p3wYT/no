@@ -63,7 +63,7 @@ describe("authorization request (Facebook Login, not Instagram Login / FLfB)", (
     const scope = new URL(ig.getAuthUrl({ state: "s", challenge: "c", redirectUri: "https://x.test/cb" })).searchParams
       .get("scope")!
       .split(",");
-    for (const p of ["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"]) {
+    for (const p of ["instagram_basic", "instagram_content_publishing", "pages_show_list", "pages_read_engagement"]) {
       expect(scope).toContain(p);
     }
     expect(scope.some((p) => p.startsWith("instagram_business_"))).toBe(false);
@@ -134,13 +134,13 @@ describe("code exchange and account discovery", () => {
   });
 
   it("records GRANTED permissions, and disables publishing if one was declined", async () => {
-    const declined = allGranted.map(([p, s]) => (p === "instagram_content_publish" ? [p, "declined"] : [p, s])) as Array<[string, string]>;
+    const declined = allGranted.map(([p, s]) => (p === "instagram_content_publishing" ? [p, "declined"] : [p, s])) as Array<[string, string]>;
     happyRoutes(declined);
     on(path("/me/accounts"), () => ({ data: [{ id: "p", instagram_business_account: { id: "ig1", username: "u" } }] }));
     const { account, tokens } = await exchange();
-    expect(tokens.scopes).not.toContain("instagram_content_publish");
+    expect(tokens.scopes).not.toContain("instagram_content_publishing");
     expect(account.canPublish).toBe(false);
-    expect(account.statusDetail).toContain("instagram_content_publish");
+    expect(account.statusDetail).toContain("instagram_content_publishing");
   });
 
   it("fails closed when granted permissions cannot be verified", async () => {
@@ -165,7 +165,7 @@ describe("code exchange and account discovery", () => {
 
   it("requires every publish permission to be granted", () => {
     expect(REQUIRED_FOR_PUBLISH).toEqual(
-      expect.arrayContaining(["instagram_basic", "instagram_content_publish", "pages_show_list", "pages_read_engagement"]),
+      expect.arrayContaining(["instagram_basic", "instagram_content_publishing", "pages_show_list", "pages_read_engagement"]),
     );
   });
 });

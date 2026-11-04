@@ -30,7 +30,7 @@ const DIALOG = `https://www.facebook.com/${GRAPH_VERSION}/dialog/oauth`;
 
 export const SCOPES = [
   "instagram_basic",
-  "instagram_content_publish",
+  "instagram_content_publishing",
   "pages_show_list",
   "pages_read_engagement",
   // Needed when the Page is owned by a Business portfolio rather than a person.
@@ -41,7 +41,7 @@ export const SCOPES = [
 // connected as read-limited and the missing permissions are listed.
 export const REQUIRED_FOR_PUBLISH = [
   "instagram_basic",
-  "instagram_content_publish",
+  "instagram_content_publishing",
   "pages_show_list",
   "pages_read_engagement",
 ];

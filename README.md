@@ -218,7 +218,7 @@ setup, so choose this one when adding the use case.
 7. The Instagram account must be **Business or Creator**, and linked to a
    **Facebook Page** that the connecting person can manage.
 
-Permissions requested: `instagram_basic`, `instagram_content_publish`,
+Permissions requested: `instagram_basic`, `instagram_content_publishing`,
 `pages_show_list`, `pages_read_engagement`, `business_management`. Publishing is
 only enabled for an account if every one except `business_management` was
 actually granted in the consent dialog. Going live for people without an app
