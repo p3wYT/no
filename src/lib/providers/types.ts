@@ -62,7 +62,9 @@ export interface PublishInput {
 }
 
 export type PublishOutcome =
-  | { kind: "published"; providerPostId: string; url?: string }
+  // `note` reports a provider-side difference from what was requested
+  // (e.g. YouTube locking an upload to private).
+  | { kind: "published"; providerPostId: string; url?: string; note?: string }
   | { kind: "processing"; providerUploadRef: string }
   // Platform/app tier only permits a private draft / handoff, not public post.
   | { kind: "draft_handoff"; providerPostId?: string; note: string };

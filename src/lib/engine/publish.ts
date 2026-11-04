@@ -44,7 +44,7 @@ export async function executePublishJob(jobId: string): Promise<void> {
     if (job.providerUploadRef && provider.reconcile) {
       const outcome = await provider.reconcile({ accessToken: token, providerUploadRef: job.providerUploadRef });
       if (outcome.kind === "published") {
-        await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url);
+        await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url, outcome.note);
         return;
       }
       if (outcome.kind === "processing") {
@@ -91,7 +91,7 @@ export async function executePublishJob(jobId: string): Promise<void> {
 
     switch (outcome.kind) {
       case "published":
-        await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url);
+        await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url, outcome.note);
         break;
       case "processing":
         await setStatus(jobId, "PUBLISHING", { providerUploadRef: outcome.providerUploadRef });
@@ -120,13 +120,18 @@ async function finalizePublished(
   platform: string,
   providerPostId: string,
   url?: string,
+  note?: string,
 ) {
   await setStatus(jobId, "PUBLISHED", {
     providerPostId,
     publishedUrl: url,
     publishedAt: new Date(),
-    lastError: null,
+    // Keep provider caveats visible on the job (shown in the queue).
+    lastError: note ?? null,
   });
+  if (note) {
+    await logActivity({ userId, kind: "publish.caveat", jobId, message: `${platform}: ${note}` });
+  }
   await logActivity({
     userId,
     kind: "publish.succeeded",
@@ -197,7 +202,7 @@ export async function reconcilePublishJob(jobId: string): Promise<void> {
   const token = await getValidAccessToken(job.destinationAccount);
   const outcome = await provider.reconcile({ accessToken: token, providerUploadRef: job.providerUploadRef });
   if (outcome.kind === "published") {
-    await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url);
+    await finalizePublished(job.id, job.userId, job.destinationPlatform, outcome.providerPostId, outcome.url, outcome.note);
   } else if (outcome.kind === "processing") {
     throw new Error("still processing"); // BullMQ retries reconcile with backoff
   }

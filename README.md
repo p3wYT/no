@@ -94,6 +94,9 @@ npm run typecheck          # tsc --noEmit
 npm run lint
 npm run build              # production build
 
+# Against a deployed environment (creates and then deletes its own test user):
+SMOKE_BASE_URL=https://your-app npm run smoke
+
 # Full pipeline against a real Postgres + Redis, in demo mode:
 npm run test:integration
 ```
@@ -123,9 +126,14 @@ Variables (production environment):
 - **Per service**: `DATABASE_URL=${{Postgres.DATABASE_URL}}`,
   `REDIS_URL=${{Redis.REDIS_URL}}` (private network), `PORT` (web 3000,
   worker 8080), plus references to the shared values.
-- **Storage (R2)**: `S3_ENDPOINT`, `S3_REGION=auto`, `S3_BUCKET`,
-  `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` on both services.
-- **Platforms**: OAuth credentials on both services as they become available.
+- **Storage**: `S3_ENDPOINT`, `S3_BUCKET`, `S3_REGION`, `S3_ACCESS_KEY_ID`,
+  `S3_SECRET_ACCESS_KEY` reference the Railway bucket (`${{media.ENDPOINT}}`
+  etc.), plus `S3_FORCE_PATH_STYLE=false`. The worker applies the bucket's CORS
+  rule (your `APP_URL` origin) on startup.
+- **Platforms**: each service references shared variables
+  (`GOOGLE_CLIENT_ID=${{shared.GOOGLE_CLIENT_ID}}`, …). Enter the real values
+  once under **Project → Settings → Shared Variables** in the Railway dashboard
+  (seal the secrets). Until then each platform shows *Setup required*.
 
 > `ENCRYPTION_KEY` must never change after accounts are connected — stored OAuth
 > tokens are encrypted with it.
@@ -133,7 +141,11 @@ Variables (production environment):
 Scheduled jobs persist in Redis and survive restarts; the worker's `scheduler`
 sweep re-enqueues any due job after a redeploy.
 
-### Cloudflare R2 setup
+### Object storage
+Production uses a **Railway Storage Bucket** (`media`): private, S3-compatible,
+encrypted at rest, wired to both services by variable reference. To use
+**Cloudflare R2** instead:
+
 1. Cloudflare dashboard → R2 → **Create bucket** (e.g. `repostflow-media`).
 2. R2 → **Manage API tokens** → create a token with *Object Read & Write* on
    that bucket. Note the Access Key ID, Secret Access Key and the account's
@@ -142,7 +154,7 @@ sweep re-enqueues any due job after a redeploy.
    ```json
    [{"AllowedOrigins":["https://YOUR_APP_URL"],"AllowedMethods":["PUT","GET","HEAD"],"AllowedHeaders":["content-type"],"MaxAgeSeconds":3600}]
    ```
-4. Set the five `S3_*` variables on both `web` and `worker` in Railway.
+4. Replace the five `S3_*` variables on both `web` and `worker` with the R2 values.
 
 ## Platform developer-app setup
 
@@ -150,13 +162,32 @@ For each platform, create an app, add the OAuth redirect URI
 `https://YOUR_APP_URL/api/connect/<platform>/callback`, and set the credentials.
 
 ### YouTube (Google)
-1. Google Cloud Console → new project → enable **YouTube Data API v3**.
-2. OAuth consent screen (External); add scopes `youtube.upload`,
-   `youtube.readonly`.
-3. Create OAuth client (Web). Redirect URI: `.../api/connect/youtube/callback`.
-4. Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`.
-5. Quota: uploads cost ~1,600 units of the default 10,000/day. Request more if
-   needed. New apps may have uploads defaulted to *private* until API audit.
+Callback URL: `https://YOUR_APP_URL/api/connect/youtube/callback`
+
+1. **Project** — [console.cloud.google.com](https://console.cloud.google.com) →
+   project picker → **New project** (e.g. `RepostFlow`).
+2. **API** — APIs & Services → Library → **YouTube Data API v3** → Enable.
+3. **Consent screen** — Google Auth Platform → **Branding**: app name, support
+   email, app home page (`https://YOUR_APP_URL`), authorized domain
+   (`up.railway.app` or your custom domain), developer contact email.
+4. **Audience** — User type **External**. While in *Testing*, add the Google
+   accounts that own your channels as **Test users** (max 100).
+5. **Data access** — add scopes `.../auth/youtube.upload` and
+   `.../auth/youtube.readonly`. Nothing else is needed.
+6. **Client** — Clients → **Create client** → *Web application*. Authorized
+   redirect URI: the callback URL above (exact match, https). No JavaScript
+   origins needed. Create, then copy the **Client ID** and **Client secret**.
+7. **Railway** — Project → Settings → **Shared Variables**: add
+   `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` (seal the secret), then deploy
+   the staged change. Both services already reference them.
+8. **Connect** — sign in to RepostFlow → Connected Accounts → *Connect YouTube*.
+
+Limits to know: in *Testing*, refresh tokens expire after 7 days (reconnect
+weekly) and only test users can connect. Moving to *In production* requires
+Google's OAuth verification for these sensitive scopes. Until the project passes
+the **YouTube API Services audit**, `videos.insert` uploads are locked to
+**private**; RepostFlow reports that on the job instead of claiming a public
+post. Default quota is 10,000 units/day (an upload ≈ 1,600).
 
 ### Instagram (Meta)
 1. developers.facebook.com → create app (Business).

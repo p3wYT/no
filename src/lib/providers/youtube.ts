@@ -15,7 +15,6 @@ import { httpJson, form } from "./http";
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube.readonly",
-  "https://www.googleapis.com/auth/userinfo.profile",
 ];
 
 function creds() {
@@ -41,7 +40,8 @@ export const youtubeProvider: Provider = {
       notes: ok
         ? [
             "Uploading counts against a daily quota (default 10,000 units; an upload ≈ 1,600 units).",
-            "New/unverified apps may have uploads defaulted to private until API compliance audit.",
+            "Until Google completes the YouTube API audit for this project, uploads are restricted to private visibility.",
+            "While the Google consent screen is in Testing mode, only listed test users can connect and access expires after 7 days.",
           ]
         : ["Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable YouTube."],
     };
@@ -202,6 +202,16 @@ export const youtubeProvider: Provider = {
     }
     const result = await putRes.json();
     const videoId = result.id as string;
-    return { kind: "published", providerPostId: videoId, url: `https://www.youtube.com/watch?v=${videoId}` };
+    const requested = metadata.status.privacyStatus;
+    const applied: string | undefined = result.status?.privacyStatus;
+    return {
+      kind: "published",
+      providerPostId: videoId,
+      url: `https://www.youtube.com/watch?v=${videoId}`,
+      note:
+        applied && applied !== requested
+          ? `YouTube set this video to "${applied}" instead of "${requested}" (unaudited API projects can only upload private videos).`
+          : undefined,
+    };
   },
 };
